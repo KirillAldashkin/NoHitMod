@@ -1,14 +1,5 @@
-#the mod name as displayed in-game
-displayName: "Kotlin Mod Template"
-
-#the internal name of your mod
-name: "example-kotlin-mod"
-
-#your name
-author: "You"
-
-#the mod description as seen in the mod dialog
-description: "A Mindustry Kotlin mod template."
-
-#the minimum game build required to run this mod
-minGameVersion: 129
+displayName: "No Hit Challenge"
+name: "nohit-challenge-mod"
+author: "nukleer"
+description: "Makes all 'Sharded' units and blocks have ~0 HP"
+minGameVersion: 146
