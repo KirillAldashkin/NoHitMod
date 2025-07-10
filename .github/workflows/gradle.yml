@@ -4,7 +4,7 @@ permissions:
   contents: write
 jobs:
   buildJar:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
     - name: Set up PATH
@@ -13,9 +13,9 @@ jobs:
     - name: Set up JDK
       uses: actions/setup-java@v4.0.0
       with:
-        java-version: 21
+        java-version: 16
         cache: 'gradle'
-        distribution: temurin
+        distribution: zulu
     - name: Build mod jar
       run: ./gradlew --no-daemon deploy
     - name: Upload workflow artifact
