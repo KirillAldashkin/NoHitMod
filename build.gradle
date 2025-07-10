@@ -158,8 +158,10 @@ task optimize(type: proguard.gradle.ProGuardTask) {
     libraryjars(libjars, jarfilter: '!**.jar', filter: '!module-info.class')
     outjars "$buildDir/libs/${project.archivesBaseName}DesktopMini.jar"
 
-    def modInfo = org.hjson.JsonValue.readHjson(generateMetadata.outputs.files.singleFile.newReader()).asObject()
-    keepclasseswithmembers("public class ${modInfo.get('main').toString()}")
+    doFirst {
+        def modInfo = org.hjson.JsonValue.readHjson(generateMetadata.outputs.files.singleFile.newReader()).asObject()
+        keepclasseswithmembers("public class ${modInfo.get('main').toString()}")
+    }
 }
 
 task deploy(type: Jar){
