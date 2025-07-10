@@ -1,0 +1,196 @@
+version '1.0'
+
+buildscript{
+    repositories{
+        mavenCentral()
+    }
+
+    ext{
+        kotlinVersion = "1.5.21"
+        sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+    }
+
+    dependencies{
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
+        classpath "org.hjson:hjson:3.1.0"
+        classpath "org.ow2.asm:asm:9.6"
+    }
+}
+// set 'mindustryVersion' using 'minGameVersion' from 'mod.hjson'
+def modFile = new File("$projectDir.absolutePath/mod.hjson")
+def modData = org.hjson.JsonValue.readHjson(modFile.newReader()).asObject()
+project.ext.set("modMetadata", modData)
+project.ext.set("mindustryVersion", modData.get("minGameVersion").toString().replace('"', ''))
+
+apply plugin: "kotlin"
+
+sourceSets.main.kotlin.srcDirs = ["src"]
+
+repositories{
+    mavenCentral()
+    maven{ url "https://raw.githubusercontent.com/Zelaux/MindustryRepo/master/repository" }
+    maven{ url 'https://www.jitpack.io' }
+}
+
+dependencies{
+    compileOnly "com.github.Anuken.Arc:arc-core:v$mindustryVersion"
+    compileOnly "com.github.Anuken.Mindustry:core:v$mindustryVersion"
+}
+
+compileKotlin{
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+task jarAndroid{
+    dependsOn "jar"
+
+    doLast{
+        if(!sdkRoot || !new File(sdkRoot).exists()) throw new GradleException("No valid Android SDK found. Ensure that ANDROID_HOME is set to your Android SDK directory.");
+
+        def platformRoot = new File("$sdkRoot/platforms/").listFiles().sort().reverse().find{ f -> new File(f, "android.jar").exists()}
+
+        if(!platformRoot) throw new GradleException("No android.jar found. Ensure that you have an Android platform installed.")
+
+        //collect dependencies needed for desugaring
+        def dependencies = (configurations.compileClasspath.asList() + configurations.runtimeClasspath.asList() + [new File(platformRoot, "android.jar")]).collect{ "--classpath $it.path" }.join(" ")
+
+        //dex and desugar files - this requires d8 in your PATH
+        "d8 $dependencies --min-api 14 --output ${project.archivesBaseName}Android.jar ${project.archivesBaseName}Desktop.jar"
+            .execute(null, new File("$buildDir/libs")).waitForProcessOutput(System.out, System.err)
+    }
+}
+
+task generateMetadata {
+    dependsOn compileKotlin
+    inputs.files(compileKotlin.outputs.files)
+    outputs.file("${temporaryDir.absolutePath}/mod.hjson")
+    doLast {
+        // search a main mod class
+        def baseClass = "mindustry/mod/Mod"
+        def userClasses = inputs.files.asFileTree.collect()
+        // build full inheritance map
+        def classes = (configurations.compileClasspath.asList() + configurations.runtimeClasspath.asList() + userClasses)
+                .stream()
+                .flatMap {(it.name.endsWith(".jar") ? zipTree(it).asList() : [it]).stream() }
+                .filter { it.name.endsWith(".class") }
+        def inheritance = new HashMap<String, String>()
+        for(final def cls in classes) {
+            def cr = new org.objectweb.asm.ClassReader(cls.newInputStream())
+            if((cr.className == null) || ((cr.superName == null))) continue
+            inheritance.put(cr.className, cr.superName)
+        }
+        // check all classes from kotlin compiler
+        def mainClass = null
+        for (final def file in userClasses) {
+            if(!file.name.endsWith(".class")) continue
+            def cr = new org.objectweb.asm.ClassReader(file.newInputStream())
+            if(!java.lang.reflect.Modifier.isPublic(cr.access)) continue
+            // walk through inheritance tree
+            def name = cr.className
+            def extendsMod = false
+            while(name != null) {
+                if(name == baseClass) {
+                    extendsMod = true
+                    break
+                }
+                name = inheritance.get(name, null)
+            }
+            if(!extendsMod) continue
+            mainClass = cr.className.replace('/', '.')
+        }
+        if(mainClass == null) throw new Exception("There is no public class that extends '$baseClass'")
+        // configure version
+        def modVersion
+        if(System.getenv("GITHUB_ACTIONS") == "true") {
+            // if built in a GitHub workflow
+            def commit = System.getenv("GITHUB_SHA")
+            def ref = System.getenv("GITHUB_REF")
+            // when a release is created, a corresponding tag is also created.
+            // Use that tag as a version
+            if(ref.startsWith("refs/tags/")) {
+                modVersion = ref.substring(10)
+                // remove some tag prefixes since Mindustry
+                // automatically appends 'v' in mod dialogue
+                if(modVersion.startsWith("ver"))
+                    modVersion = modVersion.substring(3)
+                else if(modVersion.startsWith("v"))
+                    modVersion = modVersion.substring(1)
+            } else {
+                // just some push. Use commit hash to specify
+                // that this is a development build
+                modVersion = "commit-$commit"
+            }
+        } else {
+            // if built locally, use build timestamp as a version (I don't have any better ideas)
+            modVersion = "local-${java.time.LocalDateTime.now().format("yyyy.MM.dd-HH:mm:ss.SSS")}"
+        }
+        // update and write modMetadata
+        modMetadata.set("version", modVersion)
+        modMetadata.set("main", mainClass)
+        outputs.files.singleFile.text = modMetadata.toString(org.hjson.Stringify.HJSON)
+    }
+}
+
+jar{
+    dependsOn generateMetadata
+    inputs.file(generateMetadata.outputs.files.singleFile)
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    archiveFileName = "${project.archivesBaseName}Desktop.jar"
+
+    from{
+        configurations.runtimeClasspath.collect{ it.isDirectory() ? it : zipTree(it) }
+    }
+
+    from(generateMetadata.outputs.files.singleFile.absolutePath)
+
+    from("assets/"){
+        include "**"
+    }
+}
+
+task deploy(type: Jar){
+    dependsOn jarAndroid
+    dependsOn jar
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    archiveFileName = "${project.archivesBaseName}.jar"
+
+    from{ [zipTree("$buildDir/libs/${project.archivesBaseName}Desktop.jar"), zipTree("$buildDir/libs/${project.archivesBaseName}Android.jar")] }
+
+    doLast{
+        delete{
+            delete "$buildDir/libs/${project.archivesBaseName}Desktop.jar"
+            delete "$buildDir/libs/${project.archivesBaseName}Android.jar"
+        }
+    }
+}
+
+task run{
+    dependsOn jar
+    inputs.file(jar.outputs.files.singleFile)
+    doLast{
+        def dataDirPath = "${temporaryDir.absolutePath}/datadir"
+        def gamePath = "${temporaryDir.absolutePath}/Mindustry-v${mindustryVersion}.jar"
+        def gameUrl = "https://github.com/Anuken/Mindustry/releases/download/v${mindustryVersion}/Mindustry.jar"
+        // copy mod to data directory (and automatically create it)
+        copy {
+            from inputs.files.singleFile
+            into "${dataDirPath}/mods"
+        }
+        // download Mindustry client if it doesn't exist
+        def gameFile = new File(gamePath)
+        if (!gameFile.exists()) {
+            println "Downloading Mindustry v${mindustryVersion} from ${gameUrl} to ${gamePath}"
+            new URL(gameUrl).withInputStream { from ->
+                gameFile.withOutputStream { to ->
+                    to << from
+                }
+            }
+        }
+        // run Mindustry while overriding data directory
+        javaexec {
+            environment("MINDUSTRY_DATA_DIR", dataDirPath)
+            classpath = files(gamePath)
+        }
+    }
+}
