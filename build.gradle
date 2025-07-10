@@ -14,6 +14,7 @@ buildscript{
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
         classpath "org.hjson:hjson:3.1.0"
         classpath "org.ow2.asm:asm:9.6"
+        classpath 'com.guardsquare:proguard-gradle:7.7.0'
     }
 }
 // set 'mindustryVersion' using 'minGameVersion' from 'mod.hjson'
@@ -43,7 +44,7 @@ compileKotlin{
 }
 
 task jarAndroid{
-    dependsOn "jar"
+    dependsOn "optimize"
 
     doLast{
         if(!sdkRoot || !new File(sdkRoot).exists()) throw new GradleException("No valid Android SDK found. Ensure that ANDROID_HOME is set to your Android SDK directory.");
@@ -56,7 +57,7 @@ task jarAndroid{
         def dependencies = (configurations.compileClasspath.asList() + configurations.runtimeClasspath.asList() + [new File(platformRoot, "android.jar")]).collect{ "--classpath $it.path" }.join(" ")
 
         //dex and desugar files - this requires d8 in your PATH
-        "d8 $dependencies --min-api 14 --output ${project.archivesBaseName}Android.jar ${project.archivesBaseName}Desktop.jar"
+        "d8 $dependencies --min-api 14 --output ${project.archivesBaseName}Android.jar ${project.archivesBaseName}DesktopMini.jar"
             .execute(null, new File("$buildDir/libs")).waitForProcessOutput(System.out, System.err)
     }
 }
@@ -149,13 +150,28 @@ jar{
     }
 }
 
+task optimize(type: proguard.gradle.ProGuardTask) {
+    dependsOn jar
+
+    injars jar.outputs.files
+    def libjars = ["${System.getProperty('java.home')}/jmods/java.base.jmod"] + project.configurations.compileOnly.toList()
+    libraryjars(libjars, jarfilter: '!**.jar', filter: '!module-info.class')
+    outjars "$buildDir/libs/${project.archivesBaseName}DesktopMini.jar"
+
+    def modInfo = org.hjson.JsonValue.readHjson(generateMetadata.outputs.files.singleFile.newReader()).asObject()
+    keepclasseswithmembers("public class ${modInfo.get('main').toString()}")
+}
+
 task deploy(type: Jar){
     dependsOn jarAndroid
-    dependsOn jar
+    dependsOn optimize
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     archiveFileName = "${project.archivesBaseName}.jar"
 
-    from{ [zipTree("$buildDir/libs/${project.archivesBaseName}Desktop.jar"), zipTree("$buildDir/libs/${project.archivesBaseName}Android.jar")] }
+    from {[
+        zipTree("$buildDir/libs/${project.archivesBaseName}DesktopMini.jar"),
+        zipTree("$buildDir/libs/${project.archivesBaseName}Android.jar")
+    ]}
 
     doLast{
         delete{
@@ -166,8 +182,8 @@ task deploy(type: Jar){
 }
 
 task run{
-    dependsOn jar
-    inputs.file(jar.outputs.files.singleFile)
+    dependsOn optimize
+    inputs.file(optimize.outputs.files.singleFile)
     doLast{
         def dataDirPath = "${temporaryDir.absolutePath}/datadir"
         def gamePath = "${temporaryDir.absolutePath}/Mindustry-v${mindustryVersion}.jar"
