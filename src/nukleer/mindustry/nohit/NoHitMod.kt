@@ -28,8 +28,10 @@ class NoHitMod : mindustry.mod.Mod() {
         // make force fields from buildings almost broken
         if (x is ForceProjector.ForceBuild && !x.broken) {
             val block = x.block as ForceProjector
-            val newBuildup = (block.shieldHealth + block.phaseShieldBoost * x.phaseHeat).bitDec()
-            x.buildup = kotlin.math.max(x.buildup, newBuildup)
+            val maxBuildup = (block.shieldHealth + block.phaseShieldBoost * x.phaseHeat).bitDec()
+            // break them manually - they won't when overdriven for some reason
+            if (x.buildup > maxBuildup) x.broken = true
+            x.buildup = maxBuildup
         }
     }
 
