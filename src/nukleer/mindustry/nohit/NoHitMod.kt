@@ -14,10 +14,16 @@ class NoHitMod : mindustry.mod.Mod() {
 
         // make one-shot
         x.health(newHealth)
-        if (x is Shieldc) x.shield(0f)
         // also set max health to remove annoying
         // block crack texture and unit cell blink
         x.maxHealth(forceHealth)
+
+        if (x is Shieldc) {
+            val newShield = kotlin.math.min(x.shield(), forceHealth)
+            x.shield(newShield)
+            // shields can partially mitigate damage
+            x.armor(0f)
+        }
     }
 
     init {
